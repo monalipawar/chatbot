@@ -177,11 +177,18 @@ div[data-testid="stMetric"] {{
 }}
 div[data-testid="stMetricLabel"] {{ color: rgba(255,255,255,0.45) !important; }}
 
-.stTextInput input, .stSelectbox div[data-baseweb="select"], .stTextArea textarea {{
-    background: rgba(255,255,255,0.06) !important;
-    color: white !important;
+.stTextInput input, .stSelectbox div[data-baseweb="select"], .stTextArea textarea,
+input[type="text"], input[type="password"], textarea {{
+    background: rgba(255,255,255,0.08) !important;
+    color: #ffffff !important;
+    caret-color: #ffffff !important;
     border-radius: 10px !important;
-    border: 1px solid rgba(255,255,255,0.08) !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    -webkit-text-fill-color: #ffffff !important;
+}}
+.stTextInput input::placeholder, textarea::placeholder {{
+    color: rgba(255,255,255,0.4) !important;
+    -webkit-text-fill-color: rgba(255,255,255,0.4) !important;
 }}
 .stTextInput input:focus {{
     border-color: {t['primary']} !important;

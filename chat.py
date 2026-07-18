@@ -65,11 +65,11 @@ def save_history(history):
 
 if "messages" not in st.session_state:
     st.session_state.messages = load_history()
-if "theme" not in st.session_state:
+if "theme" not in st.session_state or st.session_state.theme not in THEMES:
     st.session_state.theme = "Nebula Purple"
-if "system_prompt_choice" not in st.session_state:
+if "system_prompt_choice" not in st.session_state or st.session_state.system_prompt_choice not in SYSTEM_PROMPTS:
     st.session_state.system_prompt_choice = "Helpful Assistant"
-if "model_choice" not in st.session_state:
+if "model_choice" not in st.session_state or st.session_state.model_choice not in GEMINI_MODELS:
     st.session_state.model_choice = "Gemini 2.5 Flash-Lite (highest free limits)"
 
 # ----------------------------- STYLES -------------------------------------

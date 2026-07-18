@@ -149,6 +149,11 @@ div[data-testid="stMetricValue"] {{ color: {t['primary']} !important; }}
 with st.sidebar:
     st.markdown("### 🔑 Gemini API Key")
     env_key = os.environ.get("GEMINI_API_KEY", "")
+    if not env_key:
+        try:
+            env_key = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception:
+            env_key = ""
     api_key = st.text_input(
         "Paste your free API key",
         value=env_key,

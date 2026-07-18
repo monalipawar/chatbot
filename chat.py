@@ -157,7 +157,7 @@ with st.sidebar:
     api_key = st.text_input(
         "Paste your free API key",
         value=env_key,
-        type="password",
+        type="default",
         help="Get a free key at https://aistudio.google.com/apikey — kept in session only, never saved to disk.",
     )
     if not api_key:

@@ -36,9 +36,8 @@ THEMES = {
 }
 
 GEMINI_MODELS = {
-    "Gemini 2.5 Flash-Lite (highest free limits)": "gemini-2.5-flash-lite",
-    "Gemini 2.5 Flash (balanced, free tier)": "gemini-2.5-flash",
-    "Gemini 2.5 Pro (strongest, free tier)": "gemini-2.5-pro",
+    "Gemini 3.1 Flash-Lite (free, lightest)": "gemini-3.1-flash-lite",
+    "Gemini 3.5 Flash (free, most capable)": "gemini-3.5-flash",
 }
 
 SYSTEM_PROMPTS = {
@@ -70,7 +69,7 @@ if "theme" not in st.session_state or st.session_state.theme not in THEMES:
 if "system_prompt_choice" not in st.session_state or st.session_state.system_prompt_choice not in SYSTEM_PROMPTS:
     st.session_state.system_prompt_choice = "Helpful Assistant"
 if "model_choice" not in st.session_state or st.session_state.model_choice not in GEMINI_MODELS:
-    st.session_state.model_choice = "Gemini 2.5 Flash-Lite (highest free limits)"
+    st.session_state.model_choice = "Gemini 3.1 Flash-Lite (free, lightest)"
 
 # ----------------------------- STYLES -------------------------------------
 

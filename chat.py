@@ -228,6 +228,18 @@ input[type="text"], input[type="password"], textarea {{
 [data-testid="stChatInput"] {{
     border-color: {t['primary']}44 !important;
 }}
+[data-testid="stChatInput"] textarea,
+[data-testid="stChatInputTextArea"],
+[data-testid="stBottomBlockContainer"] textarea {{
+    background-color: #14101f !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    caret-color: #ffffff !important;
+}}
+[data-testid="stChatInput"] textarea::placeholder {{
+    color: rgba(255,255,255,0.4) !important;
+    -webkit-text-fill-color: rgba(255,255,255,0.4) !important;
+}}
 
 .timestamp {{
     font-size: 0.68rem;

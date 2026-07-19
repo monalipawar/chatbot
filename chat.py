@@ -79,6 +79,8 @@ if "model_choice" not in st.session_state or st.session_state.model_choice not i
     st.session_state.model_choice = "Gemini 3.1 Flash-Lite (free, lightest)"
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
+if "web_search_enabled" not in st.session_state:
+    st.session_state.web_search_enabled = True
 
 # ----------------------------- STYLES -------------------------------------
 
@@ -247,6 +249,31 @@ input[type="text"], input[type="password"], textarea {{
     margin-top: 0.15rem;
 }}
 
+.search-badge {{
+    display: inline-flex; align-items: center; gap: 4px;
+    background: {t['accent']}22;
+    border: 1px solid {t['accent']}55;
+    color: {t['accent']};
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 0.68rem;
+    font-weight: 500;
+    margin-top: 0.35rem;
+}}
+.sources-box {{
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}}
+.sources-box a {{
+    color: rgba(255,255,255,0.55);
+    font-size: 0.72rem;
+    text-decoration: none;
+    display: block;
+    margin-top: 0.2rem;
+}}
+.sources-box a:hover {{ color: {t['primary']}; text-decoration: underline; }}
+
 /* Suggestion chips rendered as buttons */
 div[data-testid="column"] .stButton button {{
     font-size: 0.8rem !important;
@@ -294,6 +321,14 @@ with st.sidebar:
                                                   index=list(GEMINI_MODELS.keys()).index(st.session_state.model_choice),
                                                   label_visibility="collapsed")
 
+    st.markdown("---")
+    st.markdown("### 🌐 Live Web Search")
+    st.session_state.web_search_enabled = st.toggle(
+        "Ground replies with Google Search",
+        value=st.session_state.web_search_enabled,
+        help="When on, Gemini can search the web for current info (news, prices, recent events) before answering.",
+    )
+
     st.markdown("### 🎭 Personality")
     personality_labels = [f"{v['icon']}  {k}" for k, v in PERSONALITIES.items()]
     current_label = f"{PERSONALITIES[st.session_state.system_prompt_choice]['icon']}  {st.session_state.system_prompt_choice}"
@@ -324,7 +359,7 @@ st.markdown(f"""
 <div class="hero">
 <h1>💬 OrbitChat</h1>
 <p>Your AI companion, powered by Gemini — free, fast, and always in orbit.</p>
-<div class="status-pill"><span class="status-dot"></span>{active_personality['icon']} {st.session_state.system_prompt_choice} · {active_model_label}</div>
+<div class="status-pill"><span class="status-dot"></span>{active_personality['icon']} {st.session_state.system_prompt_choice} · {active_model_label}{' · 🌐 Live search on' if st.session_state.web_search_enabled else ''}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -334,7 +369,7 @@ if not api_key:
 
 # ----------------------------- GEMINI CALL -------------------------------------
 
-def get_gemini_response(history, system_prompt, model_name, key):
+def get_gemini_response(history, system_prompt, model_name, key, use_search):
     try:
         from google import genai
         from google.genai import types
@@ -349,30 +384,73 @@ def get_gemini_response(history, system_prompt, model_name, key):
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
+    config_kwargs = dict(
+        system_instruction=system_prompt,
+        temperature=0.8,
+    )
+    if use_search:
+        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+
     response = client.models.generate_content(
         model=model_name,
         contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=0.8,
-        ),
+        config=types.GenerateContentConfig(**config_kwargs),
     )
-    return response.text
+
+    # Extract grounding sources (if the model actually used search)
+    sources = []
+    used_search = False
+    try:
+        candidate = response.candidates[0]
+        grounding = getattr(candidate, "grounding_metadata", None)
+        if grounding and getattr(grounding, "grounding_chunks", None):
+            used_search = True
+            for chunk in grounding.grounding_chunks:
+                web = getattr(chunk, "web", None)
+                if web and getattr(web, "uri", None):
+                    sources.append({"title": getattr(web, "title", web.uri), "uri": web.uri})
+    except Exception:
+        pass
+
+    return response.text, used_search, sources
 
 def handle_send(text):
     st.session_state.messages.append({"role": "user", "content": text, "ts": datetime.now().isoformat()})
+    used_search = False
+    sources = []
     try:
         model_name = GEMINI_MODELS[st.session_state.model_choice]
         system_prompt = PERSONALITIES[st.session_state.system_prompt_choice]["prompt"]
-        reply = get_gemini_response(st.session_state.messages, system_prompt, model_name, api_key)
+        reply, used_search, sources = get_gemini_response(
+            st.session_state.messages, system_prompt, model_name, api_key,
+            st.session_state.web_search_enabled,
+        )
     except Exception as e:
         reply = f"⚠️ Error calling Gemini API: {e}\n\nCheck that your API key is valid and you haven't hit the free tier rate limit."
-    st.session_state.messages.append({"role": "assistant", "content": reply, "ts": datetime.now().isoformat()})
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": reply,
+        "ts": datetime.now().isoformat(),
+        "used_search": used_search,
+        "sources": sources,
+    })
     save_history(st.session_state.messages)
 
 # ----------------------------- CHAT DISPLAY -------------------------------------
 
 AVATARS = {"user": "🧑", "assistant": active_personality["icon"]}
+
+def render_search_footer(msg):
+    if not msg.get("used_search"):
+        return
+    html = '<div class="search-badge">🌐 Searched the web</div>'
+    sources = msg.get("sources") or []
+    if sources:
+        html += '<div class="sources-box">'
+        for s in sources[:5]:
+            html += f'<a href="{s["uri"]}" target="_blank">🔗 {s["title"]}</a>'
+        html += '</div>'
+    st.markdown(html, unsafe_allow_html=True)
 
 if not st.session_state.messages:
     st.markdown(f"""
@@ -400,6 +478,7 @@ else:
                     time_str = ""
                 if time_str:
                     st.markdown(f'<div class="timestamp">{time_str}</div>', unsafe_allow_html=True)
+                render_search_footer(msg)
 
 # ----------------------------- CHAT INPUT -------------------------------------
 
@@ -419,6 +498,7 @@ if prompt_to_send:
         with st.spinner("Thinking..."):
             handle_send(prompt_to_send)
         st.markdown(st.session_state.messages[-1]["content"])
+        render_search_footer(st.session_state.messages[-1])
     st.rerun()
 
 st.caption("OrbitChat · Part of the App Universe · Your API key is never written to disk — only chat text is saved locally so history survives a refresh.")

@@ -26,6 +26,44 @@ st.set_page_config(
 )
 
 HISTORY_FILE = "orbit_chat_history.json"
+QUOTA_FILE = "orbit_chat_quota.json"
+
+def _today_pacific_str():
+    # Approximate Pacific time without extra deps: UTC-8 (close enough for a daily-reset marker)
+    from datetime import timedelta
+    return (datetime.utcnow() - timedelta(hours=8)).strftime("%Y-%m-%d")
+
+def load_quota_state():
+    default = {"date": _today_pacific_str(), "request_count": 0, "quota_hit": False, "quota_hit_ts": None}
+    if os.path.exists(QUOTA_FILE):
+        try:
+            with open(QUOTA_FILE, "r") as f:
+                data = json.load(f)
+            if data.get("date") != _today_pacific_str():
+                return default
+            return {**default, **data}
+        except Exception:
+            return default
+    return default
+
+def save_quota_state(state):
+    with open(QUOTA_FILE, "w") as f:
+        json.dump(state, f)
+
+def mark_request_sent():
+    q = st.session_state.quota_state
+    q["request_count"] += 1
+    save_quota_state(q)
+
+def mark_quota_hit():
+    q = st.session_state.quota_state
+    q["quota_hit"] = True
+    q["quota_hit_ts"] = datetime.utcnow().isoformat()
+    save_quota_state(q)
+
+def is_quota_error(exc) -> bool:
+    msg = str(exc)
+    return "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower()
 
 THEMES = {
     "Nebula Purple": {"primary": "#a78bfa", "secondary": "#f472b6", "accent": "#818cf8"},
@@ -81,6 +119,8 @@ if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
 if "web_search_enabled" not in st.session_state:
     st.session_state.web_search_enabled = True
+if "quota_state" not in st.session_state:
+    st.session_state.quota_state = load_quota_state()
 
 # ----------------------------- STYLES -------------------------------------
 
@@ -310,6 +350,14 @@ with st.sidebar:
         st.caption("✅ Key loaded for this session")
 
     st.markdown("---")
+    st.markdown("---")
+    st.markdown("### 📊 Quota Status")
+    q = st.session_state.quota_state
+    if q.get("quota_hit"):
+        st.error("🚫 Daily free-tier quota reached. Resets ~midnight Pacific, or enable billing to lift the cap.")
+    else:
+        st.caption(f"✅ {q.get('request_count', 0)} request(s) sent today · free tier")
+
     st.markdown("### 🎨 Appearance")
     st.session_state.theme = st.selectbox("Color theme", list(THEMES.keys()),
                                            index=list(THEMES.keys()).index(st.session_state.theme),
@@ -418,21 +466,36 @@ def handle_send(text):
     st.session_state.messages.append({"role": "user", "content": text, "ts": datetime.now().isoformat()})
     used_search = False
     sources = []
+    is_quota_err = False
     try:
         model_name = GEMINI_MODELS[st.session_state.model_choice]
         system_prompt = PERSONALITIES[st.session_state.system_prompt_choice]["prompt"]
+        mark_request_sent()
         reply, used_search, sources = get_gemini_response(
             st.session_state.messages, system_prompt, model_name, api_key,
             st.session_state.web_search_enabled,
         )
     except Exception as e:
-        reply = f"⚠️ Error calling Gemini API: {e}\n\nCheck that your API key is valid and you haven't hit the free tier rate limit."
+        if is_quota_error(e):
+            is_quota_err = True
+            mark_quota_hit()
+            reply = (
+                "🌌 **Daily quota reached.** OrbitChat's free Gemini tier resets once every 24 hours "
+                "(around midnight Pacific). Your message wasn't lost — it's saved above and you can "
+                "retry once the quota resets.\n\n"
+                "Want it fixed for good? Enable billing on your Google AI Studio project "
+                "([aistudio.google.com](https://aistudio.google.com)) to move off the free daily cap — "
+                "Gemini Flash models cost a fraction of a cent per message at that point."
+            )
+        else:
+            reply = f"⚠️ Something went wrong calling Gemini: {e}"
     st.session_state.messages.append({
         "role": "assistant",
         "content": reply,
         "ts": datetime.now().isoformat(),
         "used_search": used_search,
         "sources": sources,
+        "is_quota_error": is_quota_err,
     })
     save_history(st.session_state.messages)
 

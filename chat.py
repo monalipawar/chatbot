@@ -8,7 +8,9 @@ Setup:
 3. Paste your key in the sidebar (stored only in session, never saved to disk)
    — or set it as an environment variable GEMINI_API_KEY to skip the prompt.
 
-Chat history persists locally to JSON so conversations survive a page refresh.
+Multiple chat sessions persist locally to JSON, so you can start new chats
+and revisit previous ones from the sidebar. No live web search — the bot
+will say so if asked about current events instead of guessing.
 """
 
 import streamlit as st
@@ -25,7 +27,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-HISTORY_FILE = "orbit_chat_history.json"
+SESSIONS_FILE = "orbit_chat_sessions.json"
 QUOTA_FILE = "orbit_chat_quota.json"
 
 def _today_pacific_str():
@@ -94,21 +96,74 @@ SUGGESTED_PROMPTS = [
 
 # ----------------------------- STATE -------------------------------------
 
-def load_history():
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+import uuid
 
-def save_history(history):
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(history, f)
+def load_sessions():
+    if os.path.exists(SESSIONS_FILE):
+        try:
+            with open(SESSIONS_FILE, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "sessions" in data:
+                return data
+        except Exception:
+            pass
+    return {"sessions": {}, "active": None}
+
+def save_sessions(data):
+    with open(SESSIONS_FILE, "w") as f:
+        json.dump(data, f)
+
+def make_session_title(messages):
+    for m in messages:
+        if m["role"] == "user" and m["content"].strip():
+            text = m["content"].strip().replace("\n", " ")
+            return text[:40] + ("…" if len(text) > 40 else "")
+    return "New chat"
+
+def new_session():
+    sid = str(uuid.uuid4())
+    st.session_state.sessions_data["sessions"][sid] = {
+        "title": "New chat",
+        "created": datetime.now().isoformat(),
+        "messages": [],
+    }
+    st.session_state.sessions_data["active"] = sid
+    save_sessions(st.session_state.sessions_data)
+    st.session_state.messages = []
+    st.session_state.active_session_id = sid
+
+def switch_session(sid):
+    st.session_state.active_session_id = sid
+    st.session_state.sessions_data["active"] = sid
+    st.session_state.messages = st.session_state.sessions_data["sessions"][sid]["messages"]
+    save_sessions(st.session_state.sessions_data)
+
+def persist_active_session():
+    sd = st.session_state.sessions_data
+    sid = st.session_state.active_session_id
+    sd["sessions"][sid]["messages"] = st.session_state.messages
+    sd["sessions"][sid]["title"] = make_session_title(st.session_state.messages)
+    save_sessions(sd)
+
+if "sessions_data" not in st.session_state:
+    st.session_state.sessions_data = load_sessions()
+
+if "active_session_id" not in st.session_state:
+    sd = st.session_state.sessions_data
+    active = sd.get("active")
+    if active and active in sd["sessions"]:
+        st.session_state.active_session_id = active
+        st.session_state.messages = sd["sessions"][active]["messages"]
+    elif sd["sessions"]:
+        # fall back to most recently created session
+        latest_id = max(sd["sessions"], key=lambda k: sd["sessions"][k].get("created", ""))
+        st.session_state.active_session_id = latest_id
+        st.session_state.messages = sd["sessions"][latest_id]["messages"]
+    else:
+        new_session()
 
 if "messages" not in st.session_state:
-    st.session_state.messages = load_history()
+    st.session_state.messages = []
 if "theme" not in st.session_state or st.session_state.theme not in THEMES:
     st.session_state.theme = "Nebula Purple"
 if "system_prompt_choice" not in st.session_state or st.session_state.system_prompt_choice not in PERSONALITIES:
@@ -117,8 +172,6 @@ if "model_choice" not in st.session_state or st.session_state.model_choice not i
     st.session_state.model_choice = "Gemini 3.1 Flash-Lite (free, lightest)"
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
-if "web_search_enabled" not in st.session_state:
-    st.session_state.web_search_enabled = True
 if "quota_state" not in st.session_state:
     st.session_state.quota_state = load_quota_state()
 
@@ -370,13 +423,6 @@ with st.sidebar:
                                                   label_visibility="collapsed")
 
     st.markdown("---")
-    st.markdown("### 🌐 Live Web Search")
-    st.session_state.web_search_enabled = st.toggle(
-        "Ground replies with Google Search",
-        value=st.session_state.web_search_enabled,
-        help="When on, Gemini can search the web for current info (news, prices, recent events) before answering.",
-    )
-
     st.markdown("### 🎭 Personality")
     personality_labels = [f"{v['icon']}  {k}" for k, v in PERSONALITIES.items()]
     current_label = f"{PERSONALITIES[st.session_state.system_prompt_choice]['icon']}  {st.session_state.system_prompt_choice}"
@@ -392,7 +438,28 @@ with st.sidebar:
     with col_b:
         if st.button("🗑️ Clear", use_container_width=True):
             st.session_state.messages = []
-            save_history([])
+            persist_active_session()
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 💬 Chats")
+    if st.button("➕ New chat", use_container_width=True):
+        new_session()
+        st.rerun()
+
+    sd = st.session_state.sessions_data
+    ordered_ids = sorted(
+        sd["sessions"].keys(),
+        key=lambda k: sd["sessions"][k].get("created", ""),
+        reverse=True,
+    )
+    for sid in ordered_ids:
+        sess = sd["sessions"][sid]
+        title = sess.get("title") or "New chat"
+        is_active = sid == st.session_state.active_session_id
+        label = f"{'💠 ' if is_active else ''}{title}"
+        if st.button(label, key=f"chat_{sid}", use_container_width=True, disabled=is_active):
+            switch_session(sid)
             st.rerun()
 
     st.markdown("---")
@@ -407,7 +474,7 @@ st.markdown(f"""
 <div class="hero">
 <h1>💬 OrbitChat</h1>
 <p>Your AI companion, powered by Gemini — free, fast, and always in orbit.</p>
-<div class="status-pill"><span class="status-dot"></span>{active_personality['icon']} {st.session_state.system_prompt_choice} · {active_model_label}{' · 🌐 Live search on' if st.session_state.web_search_enabled else ''}</div>
+<div class="status-pill"><span class="status-dot"></span>{active_personality['icon']} {st.session_state.system_prompt_choice} · {active_model_label}</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -417,7 +484,15 @@ if not api_key:
 
 # ----------------------------- GEMINI CALL -------------------------------------
 
-def get_gemini_response(history, system_prompt, model_name, key, use_search):
+NO_CURRENT_EVENTS_NOTE = (
+    " You do not have access to live web search or real-time data. "
+    "If asked about current events, today's news, live prices, sports scores, "
+    "or anything requiring up-to-date information beyond your training, "
+    "politely explain that you can't look up current information and offer "
+    "to help in another way instead of guessing."
+)
+
+def get_gemini_response(history, system_prompt, model_name, key):
     try:
         from google import genai
         from google.genai import types
@@ -432,48 +507,26 @@ def get_gemini_response(history, system_prompt, model_name, key, use_search):
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    config_kwargs = dict(
-        system_instruction=system_prompt,
-        temperature=0.8,
-    )
-    if use_search:
-        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
-
     response = client.models.generate_content(
         model=model_name,
         contents=contents,
-        config=types.GenerateContentConfig(**config_kwargs),
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt + NO_CURRENT_EVENTS_NOTE,
+            temperature=0.8,
+        ),
     )
 
-    # Extract grounding sources (if the model actually used search)
-    sources = []
-    used_search = False
-    try:
-        candidate = response.candidates[0]
-        grounding = getattr(candidate, "grounding_metadata", None)
-        if grounding and getattr(grounding, "grounding_chunks", None):
-            used_search = True
-            for chunk in grounding.grounding_chunks:
-                web = getattr(chunk, "web", None)
-                if web and getattr(web, "uri", None):
-                    sources.append({"title": getattr(web, "title", web.uri), "uri": web.uri})
-    except Exception:
-        pass
-
-    return response.text, used_search, sources
+    return response.text
 
 def handle_send(text):
     st.session_state.messages.append({"role": "user", "content": text, "ts": datetime.now().isoformat()})
-    used_search = False
-    sources = []
     is_quota_err = False
     try:
         model_name = GEMINI_MODELS[st.session_state.model_choice]
         system_prompt = PERSONALITIES[st.session_state.system_prompt_choice]["prompt"]
         mark_request_sent()
-        reply, used_search, sources = get_gemini_response(
+        reply = get_gemini_response(
             st.session_state.messages, system_prompt, model_name, api_key,
-            st.session_state.web_search_enabled,
         )
     except Exception as e:
         if is_quota_error(e):
@@ -493,27 +546,13 @@ def handle_send(text):
         "role": "assistant",
         "content": reply,
         "ts": datetime.now().isoformat(),
-        "used_search": used_search,
-        "sources": sources,
         "is_quota_error": is_quota_err,
     })
-    save_history(st.session_state.messages)
+    persist_active_session()
 
 # ----------------------------- CHAT DISPLAY -------------------------------------
 
 AVATARS = {"user": "🧑", "assistant": active_personality["icon"]}
-
-def render_search_footer(msg):
-    if not msg.get("used_search"):
-        return
-    html = '<div class="search-badge">🌐 Searched the web</div>'
-    sources = msg.get("sources") or []
-    if sources:
-        html += '<div class="sources-box">'
-        for s in sources[:5]:
-            html += f'<a href="{s["uri"]}" target="_blank">🔗 {s["title"]}</a>'
-        html += '</div>'
-    st.markdown(html, unsafe_allow_html=True)
 
 if not st.session_state.messages:
     st.markdown(f"""
@@ -541,7 +580,6 @@ else:
                     time_str = ""
                 if time_str:
                     st.markdown(f'<div class="timestamp">{time_str}</div>', unsafe_allow_html=True)
-                render_search_footer(msg)
 
 # ----------------------------- CHAT INPUT -------------------------------------
 
@@ -561,7 +599,6 @@ if prompt_to_send:
         with st.spinner("Thinking..."):
             handle_send(prompt_to_send)
         st.markdown(st.session_state.messages[-1]["content"])
-        render_search_footer(st.session_state.messages[-1])
     st.rerun()
 
-st.caption("OrbitChat · Part of the App Universe · Your API key is never written to disk — only chat text is saved locally so history survives a refresh.")
+st.caption("OrbitChat · Part of the App Universe · Your API key is never written to disk — chats are saved locally so you can revisit past conversations anytime.")

@@ -5,8 +5,8 @@ Standalone Streamlit app. Part of the App Universe.
 Setup:
 1. Get a free Gemini API key: https://aistudio.google.com/apikey
 2. pip install google-genai streamlit
-3. Paste your key in the sidebar (stored only in session, never saved to disk)
-   — or set it as an environment variable GEMINI_API_KEY to skip the prompt.
+3. Set it as an environment variable GEMINI_API_KEY (or add it to
+   .streamlit/secrets.toml as GEMINI_API_KEY) before launching the app.
 
 Multiple chat sessions persist locally to JSON, so you can start new chats
 and revisit previous ones from the sidebar. No live web search — the bot
@@ -28,44 +28,6 @@ st.set_page_config(
 )
 
 SESSIONS_FILE = "orbit_chat_sessions.json"
-QUOTA_FILE = "orbit_chat_quota.json"
-
-def _today_pacific_str():
-    # Approximate Pacific time without extra deps: UTC-8 (close enough for a daily-reset marker)
-    from datetime import timedelta
-    return (datetime.utcnow() - timedelta(hours=8)).strftime("%Y-%m-%d")
-
-def load_quota_state():
-    default = {"date": _today_pacific_str(), "request_count": 0, "quota_hit": False, "quota_hit_ts": None}
-    if os.path.exists(QUOTA_FILE):
-        try:
-            with open(QUOTA_FILE, "r") as f:
-                data = json.load(f)
-            if data.get("date") != _today_pacific_str():
-                return default
-            return {**default, **data}
-        except Exception:
-            return default
-    return default
-
-def save_quota_state(state):
-    with open(QUOTA_FILE, "w") as f:
-        json.dump(state, f)
-
-def mark_request_sent():
-    q = st.session_state.quota_state
-    q["request_count"] += 1
-    save_quota_state(q)
-
-def mark_quota_hit():
-    q = st.session_state.quota_state
-    q["quota_hit"] = True
-    q["quota_hit_ts"] = datetime.utcnow().isoformat()
-    save_quota_state(q)
-
-def is_quota_error(exc) -> bool:
-    msg = str(exc)
-    return "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower()
 
 THEMES = {
     "Nebula Purple": {"primary": "#a78bfa", "secondary": "#f472b6", "accent": "#818cf8"},
@@ -172,8 +134,7 @@ if "model_choice" not in st.session_state or st.session_state.model_choice not i
     st.session_state.model_choice = "Gemini 3.1 Flash-Lite (free, lightest)"
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
-if "quota_state" not in st.session_state:
-    st.session_state.quota_state = load_quota_state()
+
 
 # ----------------------------- STYLES -------------------------------------
 
@@ -382,34 +343,12 @@ hr {{ border-color: rgba(255,255,255,0.08) !important; }}
 # ----------------------------- SIDEBAR -------------------------------------
 
 with st.sidebar:
-    st.markdown("### 🔑 API Key")
-    env_key = os.environ.get("GEMINI_API_KEY", "")
-    if not env_key:
-        try:
-            env_key = st.secrets.get("GEMINI_API_KEY", "")
-        except Exception:
-            env_key = ""
-    api_key = st.text_input(
-        "Gemini API key",
-        value=env_key,
-        type="default",
-        label_visibility="collapsed",
-        placeholder="Paste your free API key...",
-        help="Get a free key at https://aistudio.google.com/apikey — kept in session only, never saved to disk.",
-    )
+    api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        st.caption("👉 [Get a free Gemini API key](https://aistudio.google.com/apikey)")
-    else:
-        st.caption("✅ Key loaded for this session")
-
-    st.markdown("---")
-    st.markdown("---")
-    st.markdown("### 📊 Quota Status")
-    q = st.session_state.quota_state
-    if q.get("quota_hit"):
-        st.error("🚫 Daily free-tier quota reached. Resets ~midnight Pacific, or enable billing to lift the cap.")
-    else:
-        st.caption(f"✅ {q.get('request_count', 0)} request(s) sent today · free tier")
+        try:
+            api_key = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception:
+            api_key = ""
 
     st.markdown("### 🎨 Appearance")
     st.session_state.theme = st.selectbox("Color theme", list(THEMES.keys()),
@@ -479,7 +418,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if not api_key:
-    st.info("Add your free Gemini API key in the sidebar to start chatting. It only takes a minute — [get one here](https://aistudio.google.com/apikey).")
+    st.info("No Gemini API key found. Set the GEMINI_API_KEY environment variable (or add it to Streamlit secrets) to start chatting — [get a free key here](https://aistudio.google.com/apikey).")
     st.stop()
 
 # ----------------------------- GEMINI CALL -------------------------------------
@@ -520,33 +459,18 @@ def get_gemini_response(history, system_prompt, model_name, key):
 
 def handle_send(text):
     st.session_state.messages.append({"role": "user", "content": text, "ts": datetime.now().isoformat()})
-    is_quota_err = False
     try:
         model_name = GEMINI_MODELS[st.session_state.model_choice]
         system_prompt = PERSONALITIES[st.session_state.system_prompt_choice]["prompt"]
-        mark_request_sent()
         reply = get_gemini_response(
             st.session_state.messages, system_prompt, model_name, api_key,
         )
     except Exception as e:
-        if is_quota_error(e):
-            is_quota_err = True
-            mark_quota_hit()
-            reply = (
-                "🌌 **Daily quota reached.** OrbitChat's free Gemini tier resets once every 24 hours "
-                "(around midnight Pacific). Your message wasn't lost — it's saved above and you can "
-                "retry once the quota resets.\n\n"
-                "Want it fixed for good? Enable billing on your Google AI Studio project "
-                "([aistudio.google.com](https://aistudio.google.com)) to move off the free daily cap — "
-                "Gemini Flash models cost a fraction of a cent per message at that point."
-            )
-        else:
-            reply = f"⚠️ Something went wrong calling Gemini: {e}"
+        reply = f"⚠️ Something went wrong calling Gemini: {e}"
     st.session_state.messages.append({
         "role": "assistant",
         "content": reply,
         "ts": datetime.now().isoformat(),
-        "is_quota_error": is_quota_err,
     })
     persist_active_session()
 

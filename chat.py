@@ -4,24 +4,18 @@ Standalone Streamlit app. Part of the App Universe.
 
 Setup:
 1. Get a free Gemini API key: https://aistudio.google.com/apikey
-2. pip install google-genai streamlit pillow
+2. pip install google-genai streamlit
 3. Set it as an environment variable GEMINI_API_KEY (or add it to
    .streamlit/secrets.toml as GEMINI_API_KEY) before launching the app.
 
 Multiple chat sessions persist locally to JSON, so you can start new chats
-and revisit previous ones from the sidebar.
-
-NEW: Web Search mode uses Gemini's built-in Google Search grounding tool —
-when on, Gemini reads multiple live web sources and writes an AI-synthesized
-summary citing them (shown as source links + badge under the reply).
-NEW: Image generation — toggle "Generate Image" to have Gemini create an
-image from your prompt, shown inline in the chat.
+and revisit previous ones from the sidebar. No live web search — the bot
+will say so if asked about current events instead of guessing.
 """
 
 import streamlit as st
 import json
 import os
-import base64
 from datetime import datetime
 
 # ----------------------------- CONFIG ---------------------------------
@@ -34,8 +28,6 @@ st.set_page_config(
 )
 
 SESSIONS_FILE = "orbit_chat_sessions.json"
-IMAGES_DIR = "orbit_chat_images"
-os.makedirs(IMAGES_DIR, exist_ok=True)
 
 THEMES = {
     "Nebula Purple": {"primary": "#a78bfa", "secondary": "#f472b6", "accent": "#818cf8"},
@@ -49,8 +41,6 @@ GEMINI_MODELS = {
     "Gemini 3.1 Flash-Lite (free, lightest)": "gemini-3.1-flash-lite",
     "Gemini 3.5 Flash (free, most capable)": "gemini-3.5-flash",
 }
-
-IMAGE_MODEL = "gemini-2.5-flash-image"
 
 PERSONALITIES = {
     "Helpful Assistant": {"icon": "🤖", "prompt": "You are a helpful, friendly, and concise assistant."},
@@ -127,6 +117,7 @@ if "active_session_id" not in st.session_state:
         st.session_state.active_session_id = active
         st.session_state.messages = sd["sessions"][active]["messages"]
     elif sd["sessions"]:
+        # fall back to most recently created session
         latest_id = max(sd["sessions"], key=lambda k: sd["sessions"][k].get("created", ""))
         st.session_state.active_session_id = latest_id
         st.session_state.messages = sd["sessions"][latest_id]["messages"]
@@ -143,10 +134,6 @@ if "model_choice" not in st.session_state or st.session_state.model_choice not i
     st.session_state.model_choice = "Gemini 3.1 Flash-Lite (free, lightest)"
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
-if "web_search_on" not in st.session_state:
-    st.session_state.web_search_on = False
-if "image_gen_on" not in st.session_state:
-    st.session_state.image_gen_on = False
 
 
 # ----------------------------- STYLES -------------------------------------
@@ -190,6 +177,7 @@ h1, h2, h3 {{ color: white !important; font-weight: 700 !important; }}
     padding-bottom: 6rem;
 }}
 
+/* Hero */
 .hero {{ text-align: center; padding: 0.8rem 0 0.4rem 0; }}
 .hero h1 {{
     font-size: 2.3rem;
@@ -213,6 +201,7 @@ h1, h2, h3 {{ color: white !important; font-weight: 700 !important; }}
     box-shadow: 0 0 8px {t['accent']};
 }}
 
+/* Empty state / suggestions */
 .empty-state {{
     text-align: center;
     padding: 2rem 1rem 1rem;
@@ -220,6 +209,7 @@ h1, h2, h3 {{ color: white !important; font-weight: 700 !important; }}
 }}
 .empty-state-icon {{ font-size: 2.6rem; margin-bottom: 0.4rem; }}
 
+/* Sidebar */
 section[data-testid="stSidebar"] {{
     background: rgba(10,7,21,0.92);
     backdrop-filter: blur(10px);
@@ -261,6 +251,7 @@ input[type="text"], input[type="password"], textarea {{
     box-shadow: 0 0 0 1px {t['primary']}55 !important;
 }}
 
+/* Buttons */
 .stButton button {{
     background: linear-gradient(135deg, {t['primary']}22, {t['secondary']}22) !important;
     border: 1px solid {t['primary']}55 !important;
@@ -275,6 +266,7 @@ input[type="text"], input[type="password"], textarea {{
     transform: translateY(-1px);
 }}
 
+/* Chat bubbles */
 [data-testid="stChatMessage"] {{
     background: rgba(255,255,255,0.045);
     backdrop-filter: blur(10px);
@@ -322,17 +314,6 @@ input[type="text"], input[type="password"], textarea {{
     font-weight: 500;
     margin-top: 0.35rem;
 }}
-.image-badge {{
-    display: inline-flex; align-items: center; gap: 4px;
-    background: {t['secondary']}22;
-    border: 1px solid {t['secondary']}55;
-    color: {t['secondary']};
-    border-radius: 999px;
-    padding: 2px 9px;
-    font-size: 0.68rem;
-    font-weight: 500;
-    margin-top: 0.35rem;
-}}
 .sources-box {{
     margin-top: 0.4rem;
     padding-top: 0.4rem;
@@ -347,15 +328,13 @@ input[type="text"], input[type="password"], textarea {{
 }}
 .sources-box a:hover {{ color: {t['primary']}; text-decoration: underline; }}
 
+/* Suggestion chips rendered as buttons */
 div[data-testid="column"] .stButton button {{
     font-size: 0.8rem !important;
     padding: 0.5rem 0.7rem !important;
     white-space: normal !important;
     height: auto !important;
 }}
-
-/* Toggle pills row */
-.toggle-row {{ display: flex; gap: 0.5rem; margin-bottom: 0.4rem; }}
 
 hr {{ border-color: rgba(255,255,255,0.08) !important; }}
 </style>
@@ -442,16 +421,6 @@ if not api_key:
     st.info("No Gemini API key found. Set the GEMINI_API_KEY environment variable (or add it to Streamlit secrets) to start chatting — [get a free key here](https://aistudio.google.com/apikey).")
     st.stop()
 
-# ----------------------------- MODE TOGGLES -------------------------------------
-
-tog1, tog2, tog3 = st.columns([1, 1, 2])
-with tog1:
-    st.session_state.web_search_on = st.toggle("🌐 Web Search", value=st.session_state.web_search_on,
-                                                 help="Gemini searches the live web across multiple sources and writes an AI summary with citations.")
-with tog2:
-    st.session_state.image_gen_on = st.toggle("🎨 Generate Image", value=st.session_state.image_gen_on,
-                                                help="Your next message becomes an image generation prompt.")
-
 # ----------------------------- GEMINI CALL -------------------------------------
 
 NO_CURRENT_EVENTS_NOTE = (
@@ -462,146 +431,52 @@ NO_CURRENT_EVENTS_NOTE = (
     "to help in another way instead of guessing."
 )
 
-WEB_SEARCH_NOTE = (
-    " You have live Google Search access. When you use it, synthesize a clear, "
-    "well-organized answer in your own words that draws on multiple sources — "
-    "don't just quote one source. Mention where claims are coming from when relevant."
-)
-
-def get_gemini_client(key):
-    from google import genai
-    return genai.Client(api_key=key)
-
-def get_gemini_response(history, system_prompt, model_name, key, use_search):
+def get_gemini_response(history, system_prompt, model_name, key):
     try:
+        from google import genai
         from google.genai import types
     except ImportError:
         st.error("Missing package. Run: `pip install google-genai`")
         st.stop()
 
-    client = get_gemini_client(key)
+    client = genai.Client(api_key=key)
 
     contents = []
     for msg in history:
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    config_kwargs = dict(temperature=0.8)
-    if use_search:
-        config_kwargs["system_instruction"] = system_prompt + WEB_SEARCH_NOTE
-        config_kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
-    else:
-        config_kwargs["system_instruction"] = system_prompt + NO_CURRENT_EVENTS_NOTE
-
     response = client.models.generate_content(
         model=model_name,
         contents=contents,
-        config=types.GenerateContentConfig(**config_kwargs),
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt + NO_CURRENT_EVENTS_NOTE,
+            temperature=0.8,
+        ),
     )
 
-    text = response.text or ""
-    sources = []
-    try:
-        candidate = response.candidates[0]
-        gm = candidate.grounding_metadata
-        if gm and gm.grounding_chunks:
-            for chunk in gm.grounding_chunks:
-                web = getattr(chunk, "web", None)
-                if web and web.uri:
-                    sources.append({"title": web.title or web.uri, "uri": web.uri})
-    except Exception:
-        pass
-
-    return text, sources
-
-def generate_gemini_image(prompt, key):
-    """Returns (caption_text, list_of_base64_png_strings)."""
-    from google.genai import types
-
-    client = get_gemini_client(key)
-    response = client.models.generate_content(
-        model=IMAGE_MODEL,
-        contents=[prompt],
-    )
-
-    text_out = ""
-    images_b64 = []
-    for part in response.candidates[0].content.parts:
-        if getattr(part, "text", None):
-            text_out += part.text
-        if getattr(part, "inline_data", None) and part.inline_data.data:
-            images_b64.append(base64.b64encode(part.inline_data.data).decode("utf-8"))
-    return text_out.strip(), images_b64
-
-def save_image_files(images_b64, sid):
-    """Save base64 images to disk, return list of relative file paths."""
-    paths = []
-    for i, b64 in enumerate(images_b64):
-        fname = f"{sid}_{uuid.uuid4().hex[:8]}.png"
-        fpath = os.path.join(IMAGES_DIR, fname)
-        with open(fpath, "wb") as f:
-            f.write(base64.b64decode(b64))
-        paths.append(fpath)
-    return paths
+    return response.text
 
 def handle_send(text):
     st.session_state.messages.append({"role": "user", "content": text, "ts": datetime.now().isoformat()})
-
-    if st.session_state.image_gen_on:
-        try:
-            caption, images_b64 = generate_gemini_image(text, api_key)
-            image_paths = save_image_files(images_b64, st.session_state.active_session_id)
-            reply = caption if caption else "Here's what I created:"
-            msg = {
-                "role": "assistant",
-                "content": reply,
-                "ts": datetime.now().isoformat(),
-                "images": image_paths,
-                "generated": True,
-            }
-        except Exception as e:
-            msg = {"role": "assistant", "content": f"⚠️ Image generation failed: {e}", "ts": datetime.now().isoformat()}
-        st.session_state.messages.append(msg)
-        persist_active_session()
-        return
-
     try:
         model_name = GEMINI_MODELS[st.session_state.model_choice]
         system_prompt = PERSONALITIES[st.session_state.system_prompt_choice]["prompt"]
-        reply, sources = get_gemini_response(
+        reply = get_gemini_response(
             st.session_state.messages, system_prompt, model_name, api_key,
-            st.session_state.web_search_on,
         )
     except Exception as e:
-        reply, sources = f"⚠️ Something went wrong calling Gemini: {e}", []
-
-    msg = {
+        reply = f"⚠️ Something went wrong calling Gemini: {e}"
+    st.session_state.messages.append({
         "role": "assistant",
         "content": reply,
         "ts": datetime.now().isoformat(),
-    }
-    if sources:
-        msg["sources"] = sources
-        msg["searched"] = True
-    st.session_state.messages.append(msg)
+    })
     persist_active_session()
 
 # ----------------------------- CHAT DISPLAY -------------------------------------
 
 AVATARS = {"user": "🧑", "assistant": active_personality["icon"]}
-
-def render_assistant_extras(msg):
-    if msg.get("searched") and msg.get("sources"):
-        st.markdown('<div class="search-badge">🌐 AI summary from multiple web sources</div>', unsafe_allow_html=True)
-        links_html = "".join(
-            f'<a href="{s["uri"]}" target="_blank">🔗 {s["title"]}</a>' for s in msg["sources"][:6]
-        )
-        st.markdown(f'<div class="sources-box">{links_html}</div>', unsafe_allow_html=True)
-    if msg.get("generated"):
-        st.markdown('<div class="image-badge">🎨 AI-generated image</div>', unsafe_allow_html=True)
-    for img_path in msg.get("images", []):
-        if os.path.exists(img_path):
-            st.image(img_path, use_container_width=True)
 
 if not st.session_state.messages:
     st.markdown(f"""
@@ -621,8 +496,6 @@ else:
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"], avatar=AVATARS.get(msg["role"], "💬")):
             st.markdown(msg["content"])
-            if msg["role"] == "assistant":
-                render_assistant_extras(msg)
             ts = msg.get("ts")
             if ts:
                 try:
@@ -634,8 +507,7 @@ else:
 
 # ----------------------------- CHAT INPUT -------------------------------------
 
-placeholder = "Describe the image you want..." if st.session_state.image_gen_on else "Ask me anything..."
-user_input = st.chat_input(placeholder)
+user_input = st.chat_input("Ask me anything...")
 
 prompt_to_send = None
 if st.session_state.pending_prompt:
@@ -648,14 +520,9 @@ if prompt_to_send:
     with st.chat_message("user", avatar="🧑"):
         st.markdown(prompt_to_send)
     with st.chat_message("assistant", avatar=active_personality["icon"]):
-        spinner_text = "Painting..." if st.session_state.image_gen_on else (
-            "Searching the web..." if st.session_state.web_search_on else "Thinking..."
-        )
-        with st.spinner(spinner_text):
+        with st.spinner("Thinking..."):
             handle_send(prompt_to_send)
-        last_msg = st.session_state.messages[-1]
-        st.markdown(last_msg["content"])
-        render_assistant_extras(last_msg)
+        st.markdown(st.session_state.messages[-1]["content"])
     st.rerun()
 
-st.caption("OrbitChat · Part of the App Universe · Web Search uses live Google grounding · Your API key is never written to disk — chats and generated images are saved locally.")
+st.caption("OrbitChat · Part of the App Universe · Your API key is never written to disk — chats are saved locally so you can revisit past conversations anytime.")

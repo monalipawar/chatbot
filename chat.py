@@ -54,8 +54,9 @@ THEMES = {
 }
 
 GEMINI_MODELS = {
-    "Gemini 3.7 Flash (free, lightest)": "gemini-3.7f lash",
+    "Gemini 3.1 Flash-Lite (free, lightest)": "gemini-3.1-flash-lite",
     "Gemini 3.5 Flash (free, most capable)": "gemini-3.5-flash",
+    "Gemini 3.7 Flash (paid tier only)": "gemini-3.7-flash",
 }
 MODEL_ORDER = list(GEMINI_MODELS.values())  # fallback order
 
@@ -126,7 +127,11 @@ def switch_session(sid):
     sess = st.session_state.sessions_data["sessions"][sid]
     st.session_state.messages = sess["messages"]
     st.session_state.system_prompt_choice = sess.get("personality", "Helpful Assistant")
+    if st.session_state.system_prompt_choice not in PERSONALITIES:
+        st.session_state.system_prompt_choice = "Helpful Assistant"
     st.session_state.model_choice = sess.get("model", list(GEMINI_MODELS.keys())[0])
+    if st.session_state.model_choice not in GEMINI_MODELS:
+        st.session_state.model_choice = list(GEMINI_MODELS.keys())[0]
     save_sessions(st.session_state.sessions_data)
 
 def persist_active_session():
@@ -384,12 +389,16 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 🤖 Model (this chat)")
+    if st.session_state.model_choice not in GEMINI_MODELS:
+        st.session_state.model_choice = list(GEMINI_MODELS.keys())[0]
     st.session_state.model_choice = st.selectbox("Gemini model", list(GEMINI_MODELS.keys()),
                                                   index=list(GEMINI_MODELS.keys()).index(st.session_state.model_choice),
                                                   label_visibility="collapsed")
 
     st.markdown("---")
     st.markdown("### 🎭 Personality (this chat)")
+    if st.session_state.system_prompt_choice not in PERSONALITIES:
+        st.session_state.system_prompt_choice = "Helpful Assistant"
     personality_labels = [f"{v['icon']}  {k}" for k, v in PERSONALITIES.items()]
     current_label = f"{PERSONALITIES[st.session_state.system_prompt_choice]['icon']}  {st.session_state.system_prompt_choice}"
     chosen_label = st.selectbox("Assistant style", personality_labels,

@@ -54,7 +54,7 @@ THEMES = {
 }
 
 GEMINI_MODELS = {
-    "Gemini 3.1 Flash-Lite (free, lightest)": "gemini-3.1-flash-lite",
+    "Gemini 3.7 Flash (free, lightest)": "gemini-3.7f lash",
     "Gemini 3.5 Flash (free, most capable)": "gemini-3.5-flash",
 }
 MODEL_ORDER = list(GEMINI_MODELS.values())  # fallback order
